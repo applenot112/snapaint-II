@@ -64,13 +64,13 @@
         #canvas-container {
             flex: 1; position: relative; overflow: hidden; display: flex; 
             justify-content: center; align-items: center; background: #1A252F;
-            width: 100%; /* Ensure container takes full width */
+            width: 100%; 
         }
         #game-canvas {
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
             transform-origin: center center;
             transition: transform 0.1s ease-out;
-            display: block; /* Prevent inline spacing issues */
+            display: block; 
         }
 
         #bottom-panel {
@@ -206,9 +206,21 @@
             gridData: [],
             colorMap: {},   
             numberMap: {},  
-            selectedHex: null,
-            scale: 1,
-            startDist: 0
+            selectedHex: null
+        };
+
+        // 視圖狀態 (獨立管理縮放與平移)
+        let view = { 
+            scale: 1, 
+            tx: 0, 
+            ty: 0, 
+            panning: false, 
+            sx: 0, 
+            sy: 0, 
+            lx: 0, 
+            ly: 0, 
+            dragDist: 0, 
+            touchMove: false 
         };
 
         function showScreen(id) {
@@ -226,12 +238,29 @@
             setTimeout(() => { toast.style.display = 'none'; }, 2000);
         }
 
+        function applyView() {
+            const canvas = document.getElementById('game-canvas');
+            canvas.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
+            
+            const container = document.getElementById('canvas-container');
+            if (view.scale > 1) {
+                container.style.cursor = view.panning ? 'grabbing' : 'grab';
+            } else {
+                container.style.cursor = 'crosshair';
+            }
+        }
+
+        function resetView() {
+            view.scale = 1;
+            view.tx = 0;
+            view.ty = 0;
+            applyView();
+        }
+
         function goHome() {
             showScreen('screen-menu');
             hideOverlay('overlay-complete');
-            state.scale = 1;
-            const canvas = document.getElementById('game-canvas');
-            if(canvas) canvas.style.transform = `scale(1)`;
+            resetView();
         }
 
         function triggerUpload() { document.getElementById('file-input').click(); }
@@ -265,7 +294,6 @@
         }
 
         function startGame(difficultyLevel) {
-            // Validation: Ensure an image is loaded before proceeding
             if (!state.img || !state.img.complete || state.img.naturalWidth === 0) {
                 showToast("請先上傳或拍攝一張照片！");
                 return;
@@ -275,10 +303,9 @@
             state.scaleFactor = scaleFactors[difficultyLevel];
             showOverlay('overlay-loading');
             
-            // CRITICAL FIX: Show the screen FIRST so the DOM can calculate dimensions
+            resetView(); // 重置視圖
             showScreen('screen-game');
 
-            // Delay processing to allow the browser to complete layout rendering
             setTimeout(() => {
                 processImage();
                 hideOverlay('overlay-loading');
@@ -308,11 +335,14 @@
             state.gridCols = cols;
             state.gridRows = rows;
 
-            const cellSize = 20;
+            // 【核心修復 1】動態計算內部解析度，確保格子夠大以容納文字
+            const MAX_DIMENSION = 2000; 
+            let cellSize = Math.floor(MAX_DIMENSION / Math.max(cols, rows));
+            cellSize = Math.max(cellSize, 20); // 最小 20px 保證清晰度
+
             canvas.width = cols * cellSize;
             canvas.height = rows * cellSize;
             
-            // CRITICAL FIX: Ensure CSS dimensions are applied correctly after DOM is visible
             resizeCanvasCSS(); 
 
             const offscreen = document.createElement('canvas');
@@ -371,7 +401,6 @@
             const container = document.getElementById('canvas-container');
             const canvas = document.getElementById('game-canvas');
             
-            // Fallback to window dimensions if container hasn't rendered yet
             const containerW = container.clientWidth || window.innerWidth;
             const containerH = container.clientHeight || (window.innerHeight - 150); 
             
@@ -411,17 +440,21 @@
                 ctx.strokeRect(x, y, cellW, cellH);
 
                 if (!cell.filled) {
-                    ctx.fillStyle = cell.textColor; 
-                    const fontSize = Math.max(8, Math.min(cellW, cellH) / 3);
-                    if (fontSize >= 10) { 
+                    // 【核心修復 2】高對比描邊演算法，確保數字在任何灰階下都清晰可見
+                    const fontSize = Math.min(cellW, cellH) * 0.45; 
+                    if (fontSize >= 6) { 
                         ctx.font = `bold ${fontSize}px monospace`;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
                         
-                        ctx.shadowColor = cell.textColor === '#000000' ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.8)';
-                        ctx.shadowBlur = 3;
+                        // 設定與文字顏色相反的描邊 (黑字白邊 / 白字黑邊)
+                        ctx.strokeStyle = cell.textColor === '#000000' ? '#FFFFFF' : '#000000';
+                        ctx.fillStyle = cell.textColor;
+                        ctx.lineWidth = Math.max(1, fontSize / 6);
+                        
+                        // 先畫描邊，再畫填充，確保極致清晰
+                        ctx.strokeText(cell.targetNumber, x + cellW / 2, y + cellH / 2);
                         ctx.fillText(cell.targetNumber, x + cellW / 2, y + cellH / 2);
-                        ctx.shadowBlur = 0; 
                     }
                 }
             });
@@ -475,7 +508,77 @@
             const canvas = document.getElementById('game-canvas');
             const container = document.getElementById('canvas-container');
 
+            // 【核心修復 3】PC 端滑鼠滾輪縮放
+            container.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const delta = -e.deltaY;
+                const zoomIntensity = 0.15;
+                const newScale = view.scale + (delta > 0 ? zoomIntensity : -zoomIntensity);
+                view.scale = Math.min(Math.max(newScale, 1), 10); // 最高 10 倍
+                applyView();
+            }, { passive: false });
+
+            // 【核心修復 4】PC 端滑鼠拖拽平移
+            container.addEventListener('mousedown', (e) => {
+                if (view.scale > 1) {
+                    view.panning = true;
+                    view.sx = e.clientX - view.tx;
+                    view.sy = e.clientY - view.ty;
+                    view.lx = e.clientX;
+                    view.ly = e.clientY;
+                    view.dragDist = 0;
+                    applyView();
+                }
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (view.panning) {
+                    view.tx = e.clientX - view.sx;
+                    view.ty = e.clientY - view.sy;
+                    view.dragDist += Math.abs(e.clientX - view.lx) + Math.abs(e.clientY - view.ly);
+                    view.lx = e.clientX;
+                    view.ly = e.clientY;
+                    applyView();
+                }
+            });
+            window.addEventListener('mouseup', () => {
+                view.panning = false;
+                applyView();
+            });
+
+            // 行動裝置觸控縮放
+            container.ontouchstart = (e) => {
+                view.touchMove = false;
+                if (e.touches.length === 2) {
+                    view.startDist = Math.hypot(
+                        e.touches[0].pageX - e.touches[1].pageX,
+                        e.touches[0].pageY - e.touches[1].pageY
+                    );
+                }
+            };
+
+            container.ontouchmove = (e) => {
+                view.touchMove = true;
+                if (e.touches.length === 2) {
+                    e.preventDefault(); 
+                    const currentDist = Math.hypot(
+                        e.touches[0].pageX - e.touches[1].pageX,
+                        e.touches[0].pageY - e.touches[1].pageY
+                    );
+                    view.scale *= currentDist / view.startDist;
+                    view.scale = Math.min(Math.max(view.scale, 1), 10); 
+                    view.startDist = currentDist;
+                    applyView();
+                }
+            };
+            
+            // 點擊填色邏輯 (包含防拖拽誤觸機制)
             canvas.onclick = (e) => {
+                if (view.dragDist > 5 || view.touchMove) {
+                    view.dragDist = 0;
+                    view.touchMove = false;
+                    return; 
+                }
+
                 if (!state.selectedHex) {
                     showToast("請先選擇顏色編號！");
                     return;
@@ -505,29 +608,6 @@
                     } else {
                         showToast("編號不符，請重新選擇！");
                     }
-                }
-            };
-
-            container.ontouchstart = (e) => {
-                if (e.touches.length === 2) {
-                    state.startDist = Math.hypot(
-                        e.touches[0].pageX - e.touches[1].pageX,
-                        e.touches[0].pageY - e.touches[1].pageY
-                    );
-                }
-            };
-
-            container.ontouchmove = (e) => {
-                if (e.touches.length === 2) {
-                    e.preventDefault(); 
-                    const currentDist = Math.hypot(
-                        e.touches[0].pageX - e.touches[1].pageX,
-                        e.touches[0].pageY - e.touches[1].pageY
-                    );
-                    state.scale *= currentDist / state.startDist;
-                    state.scale = Math.min(Math.max(state.scale, 1), 5); 
-                    canvas.style.transform = `scale(${state.scale})`;
-                    state.startDist = currentDist;
                 }
             };
             
