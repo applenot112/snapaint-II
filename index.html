@@ -17,7 +17,9 @@
             background-color: var(--bg);
             color: var(--text);
             overflow: hidden;
-            height: 100vh;
+            /* FIX 1: Use dvh for mobile browsers to account for address bars */
+            height: 100vh; 
+            height: 100dvh; 
             width: 100vw;
             display: flex;
             flex-direction: column;
@@ -47,6 +49,7 @@
         #game-header {
             padding: 10px 15px; background: #fff; display: flex; justify-content: space-between; 
             align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 10;
+            flex-shrink: 0; /* Prevent header from shrinking */
         }
         #game-header button { background: none; border: none; font-size: 1.2rem; color: var(--primary); cursor: pointer; }
         
@@ -61,21 +64,27 @@
             font-size: 0.7rem; font-weight: bold; color: var(--primary);
         }
 
+        /* FIX 2: min-height: 0 is CRITICAL for flexbox children to scale down properly */
         #canvas-container {
-            flex: 1; position: relative; overflow: hidden; display: flex; 
+            flex: 1; 
+            min-height: 0; 
+            position: relative; overflow: hidden; display: flex; 
             justify-content: center; align-items: center; background: #1A252F;
             width: 100%; 
         }
         #game-canvas {
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
             transform-origin: center center;
-            transition: transform 0.1s ease-out;
+            transition: transform 0.05s ease-out;
             display: block; 
+            max-width: 100%;
+            max-height: 100%;
         }
 
         #bottom-panel {
             background: #fff; padding: 10px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
             display: flex; flex-direction: column; gap: 10px; z-index: 10;
+            flex-shrink: 0; /* Prevent bottom panel from shrinking */
         }
         #palette-container {
             display: flex; gap: 12px; overflow-x: auto; padding: 5px 0;
@@ -207,7 +216,7 @@
             colorMap: {},   
             numberMap: {},  
             selectedHex: null,
-            remainingCounts: {} // Tracks how many cells are left for each color
+            remainingCounts: {} 
         };
 
         let view = { 
@@ -222,6 +231,10 @@
             dragDist: 0, 
             touchMove: false 
         };
+
+        function clamp(num, min, max) {
+            return Math.min(Math.max(num, min), max);
+        }
 
         function showScreen(id) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -240,9 +253,28 @@
 
         function applyView() {
             const canvas = document.getElementById('game-canvas');
+            const container = document.getElementById('canvas-container');
+            
+            const cW = container.clientWidth;
+            const cH = container.clientHeight;
+            
+            if(cW === 0 || cH === 0) return;
+
+            const dispW = canvas.offsetWidth;
+            const dispH = canvas.offsetHeight;
+            
+            const scaledW = dispW * view.scale;
+            const scaledH = dispH * view.scale;
+            
+            // FIX 4: Boundary limits so you can't drag the canvas off-screen
+            const maxTx = Math.max(0, (scaledW - cW) / 2);
+            const maxTy = Math.max(0, (scaledH - cH) / 2);
+            
+            view.tx = clamp(view.tx, -maxTx, maxTx);
+            view.ty = clamp(view.ty, -maxTy, maxTy);
+
             canvas.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
             
-            const container = document.getElementById('canvas-container');
             if (view.scale > 1) {
                 container.style.cursor = view.panning ? 'grabbing' : 'grab';
             } else {
@@ -306,11 +338,14 @@
             resetView(); 
             showScreen('screen-game');
 
-            setTimeout(() => {
-                processImage();
-                hideOverlay('overlay-loading');
-                setupCanvasEvents();
-            }, 150); 
+            // FIX 3: Double requestAnimationFrame guarantees the browser finishes layout calculations
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    processImage();
+                    hideOverlay('overlay-loading');
+                    setupCanvasEvents();
+                });
+            });
         }
 
         function processImage() {
@@ -381,7 +416,7 @@
             const uniqueHexes = Array.from(paletteSet).sort();
             state.colorMap = {};
             state.numberMap = {};
-            state.remainingCounts = {}; // Initialize counts
+            state.remainingCounts = {}; 
             
             uniqueHexes.forEach((hex, index) => {
                 const numStr = String(index + 1).padStart(4, '0');
@@ -392,7 +427,7 @@
                 state.gridData.forEach(cell => {
                     if (cell.targetHex === hex) {
                         cell.targetNumber = numStr;
-                        state.remainingCounts[hex]++; // Count occurrences
+                        state.remainingCounts[hex]++; 
                     }
                 });
             });
@@ -406,9 +441,11 @@
             const container = document.getElementById('canvas-container');
             const canvas = document.getElementById('game-canvas');
             
-            const containerW = container.clientWidth || window.innerWidth;
-            const containerH = container.clientHeight || (window.innerHeight - 150); 
+            const containerW = container.clientWidth;
+            const containerH = container.clientHeight;
             
+            if (containerW === 0 || containerH === 0) return; 
+
             const canvasAspect = canvas.width / canvas.height;
             const containerAspect = containerW / containerH;
             
@@ -419,6 +456,7 @@
                 canvas.style.height = containerH + 'px';
                 canvas.style.width = (containerH * canvasAspect) + 'px';
             }
+            applyView();
         }
 
         function drawCanvas() {
@@ -470,7 +508,7 @@
                 const hex = state.numberMap[num];
                 const item = document.createElement('div');
                 item.className = 'palette-item';
-                item.dataset.hex = hex; // Store hex for dynamic updates
+                item.dataset.hex = hex; 
                 item.style.backgroundColor = hexToRgbString(hex);
                 
                 const r = parseInt(hex[0], 16) * 17;
@@ -486,13 +524,12 @@
             });
         }
 
-        // NEW FUNCTION: Dynamically hide completed colors
         function updatePalette() {
             const items = document.querySelectorAll('.palette-item');
             items.forEach(item => {
                 const hex = item.dataset.hex;
                 if (state.remainingCounts[hex] <= 0) {
-                    item.style.display = 'none'; // Disappear when fully used
+                    item.style.display = 'none'; 
                     if (state.selectedHex === hex) {
                         state.selectedHex = null;
                         document.getElementById('num-input').value = '';
@@ -588,6 +625,18 @@
                 }
             };
             
+            // FIX 5: Double click / Double tap to reset view instantly
+            let lastTap = 0;
+            container.addEventListener('dblclick', resetView);
+            container.addEventListener('touchend', (e) => {
+                if (e.touches.length > 0) return; 
+                const now = Date.now();
+                if (now - lastTap < 300) {
+                    resetView();
+                }
+                lastTap = now;
+            });
+
             canvas.onclick = (e) => {
                 if (view.dragDist > 5 || view.touchMove) {
                     view.dragDist = 0;
@@ -618,10 +667,10 @@
                 if (cell && !cell.filled) {
                     if (cell.targetHex === state.selectedHex) {
                         cell.filled = true;
-                        state.remainingCounts[cell.targetHex]--; // Decrement count
+                        state.remainingCounts[cell.targetHex]--; 
                         drawCanvas();
                         updateProgress();
-                        updatePalette(); // Trigger UI update
+                        updatePalette(); 
                         checkWin();
                     } else {
                         showToast("編號不符，請重新選擇！");
@@ -629,7 +678,10 @@
                 }
             };
             
-            window.onresize = resizeCanvasCSS;
+            window.addEventListener('resize', resizeCanvasCSS);
+            window.addEventListener('orientationchange', () => {
+                setTimeout(resizeCanvasCSS, 300); // Delay for mobile rotation animation
+            });
         }
 
         function updateProgress() {
@@ -656,13 +708,12 @@
 
         function resetGrid() {
             state.gridData.forEach(c => c.filled = false);
-            // Reset counts
             for (let hex in state.remainingCounts) {
                 state.remainingCounts[hex] = state.gridData.filter(c => c.targetHex === hex).length;
             }
             drawCanvas();
             updateProgress();
-            updatePalette(); // Restore hidden colors
+            updatePalette(); 
             showToast("已重置畫布");
         }
 
