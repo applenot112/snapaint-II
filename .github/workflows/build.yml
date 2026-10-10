@@ -24,16 +24,13 @@ jobs:
           mkdir www
           mv index.html www/
         fi
-        # 建立空的 package.json 以滿足部分工具的要求
-        echo "{}" > package.json
 
     - name: Convert to APK
       uses: darkshredder/web-to-app-action@main
       with:
         build-folder-path: "www"          # 指定我們的網頁資料夾
         app-name: "SnapPaint"             # APP 顯示名稱
-        package-name: "com.example.snapaint" # APP 內部套件名稱
-        output-folder-path: "my-apks"     # 產出 APK 的資料夾
+        output-folder-path: "my-apks"     # 產出 APK 的資料夾 (已移除 package-name)
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
