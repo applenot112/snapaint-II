@@ -1,4 +1,4 @@
-name: Build SnapPaint APK
+name: Build SnapPaint APK (Stable v5)
 
 on:
   push:
@@ -10,33 +10,42 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 1. 取得原始碼
+      # 1. 取得原始碼 (使用最新版 checkout v5)
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # 2. 設置 Node.js (使用最新 LTS 版本 22)
+      # 2. 設置 Node.js (使用最新版 setup-node v5，強制 Node 22 LTS)
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
+          cache: 'npm'
 
-      # 3. 安裝 Capacitor 依賴項
+      # 3. 安裝依賴項
       - name: Install Dependencies
-        run: |
-          npm install @capacitor/core @capacitor/android
-          npm install -D @capacitor/cli
+        run: npm install @capacitor/core @capacitor/android @capacitor/cli --save-dev
 
-      # 4. 初始化 Capacitor 項目 (這會創建 capacitor.config.ts)
-      - name: Init Capacitor Config
+      # 4. 【關鍵修正】手動建立 capacitor.config.json
+      # 避免 npx cap init 在 CI 中可能的互動式問題
+      - name: Create Capacitor Config Manually
         run: |
-          npx cap init "SnapPaint" com.example.snapaint --web-dir=www --force
+          cat > capacitor.config.json << EOF
+          {
+            "appId": "com.example.snapaint",
+            "appName": "SnapPaint",
+            "webDir": "www",
+            "bundledWebRuntime": false
+          }
+          EOF
+          echo "Config created:"
+          cat capacitor.config.json
 
-      # 5. 添加 Android 平台 (這會創建 android/ 資料夾及其中的所有 Gradle 檔案)
-      # 【關鍵】這一步必須在 setup-java 之前完成，否則 Java 插件找不到 Gradle 檔案
+      # 5. 添加 Android 平台
+      # 這會根據上面的 config 自動生成 android/ 資料夾結構
       - name: Add Android Platform
         run: npx cap add android
 
-      # 6. 設置 Java JDK (使用 v5 版本以消除棄用警告)
+      # 6. 設置 Java JDK (使用 v5)
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -48,19 +57,31 @@ jobs:
       - name: Inject Permissions
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "Error: Manifest not found at $MANIFEST"
+            exit 1
+          fi
+          # 備份原檔案以便除錯
+          cp "$MANIFEST" "$MANIFEST.bak"
+          
+          # 插入權限
           sed -i '/<application>/a\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
           sed -i '/<application>/a\    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />' "$MANIFEST"
+          
+          echo "Permissions injected. Checking manifest..."
+          grep -A 2 "<application>" "$MANIFEST"
 
-      # 8. 同步 Web 資源到 Android 項目
+      # 8. 同步 Web 資源
       - name: Sync Capacitor
         run: npx cap sync android
 
-      # 9. 編譯 APK
+      # 9. 編譯 APK (加入詳細日誌)
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          # --info 會顯示更多細節，幫助我們找出真正的錯誤原因
+          ./gradlew assembleDebug --no-daemon --stacktrace --info
 
       # 10. 上傳成品
       - name: Upload Artifact
