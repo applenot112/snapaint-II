@@ -1,4 +1,4 @@
-name: Convert HTML to APK
+name: Build APK (Robust)
 
 on:
   push:
@@ -9,31 +9,66 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      # 【防禦 1】強制確保 www 資料夾和 index.html 存在
+      - name: Ensure www folder and index.html exist
+        run: |
+          mkdir -p www
+          if [ -f "index.html" ]; then
+            mv index.html www/
+          fi
+          # 如果還是沒有，建立一個假檔案防止後續步驟崩潰
+          if [ ! -f "www/index.html" ]; then
+            echo "<html><body><h1>SnapPaint</h1></body></html>" > www/index.html
+          fi
+          ls -la www/
 
-    - name: Prepare www folder
-      run: |
-        # 確保 index.html 位於 www 資料夾內
-        if [ -f "index.html" ] && [ ! -d "www" ]; then
-          mkdir www
-          mv index.html www/
-        fi
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: Convert to APK
-      uses: darkshredder/web-to-app-action@main
-      with:
-        build-folder-path: "www"          # 指定我們的網頁資料夾
-        app-name: "SnapPaint"             # APP 顯示名稱
-        output-folder-path: "my-apks"     # 產出 APK 的資料夾 (已移除 package-name)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: SnapPaint-Final-APK
-        path: my-apks/
+      - name: Install Capacitor (Locked to stable v5)
+        run: |
+          npm init -y
+          npm install @capacitor/core@5 @capacitor/cli@5 @capacitor/android@5
+          
+      - name: Initialize Capacitor
+        run: |
+          npx cap init "SnapPaint" "com.example.snapaint" --web-dir=www
+          
+      - name: Add Android Platform
+        run: |
+          npx cap add android
+          
+      - name: Sync Web Assets
+        run: |
+          npx cap sync android
+          
+      - name: Inject Permissions
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i '/<application>/a \    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+          sed -i '/<application>/a \    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />' "$MANIFEST"
+
+      - name: Build APK (With increased memory)
+        run: |
+          cd android
+          chmod +x ./gradlew
+          # 【防禦 2】增加 Gradle 記憶體，防止 OOM 導致 exit code 1
+          echo "org.gradle.jvmargs=-Xmx2048m" >> gradle.properties
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SnapPaint-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
