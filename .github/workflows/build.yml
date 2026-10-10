@@ -1,2 +1,42 @@
-- name: HTML to APK Action
-  uses: kimhuilim/web-to-app-action@Alpha3
+name: Convert HTML to APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Prepare www folder
+      run: |
+        # 確保 index.html 位於 www 資料夾內
+        if [ -f "index.html" ] && [ ! -d "www" ]; then
+          mkdir www
+          mv index.html www/
+        fi
+        # 建立空的 package.json 以滿足部分工具的要求
+        echo "{}" > package.json
+
+    - name: Convert to APK
+      uses: darkshredder/web-to-app-action@main
+      with:
+        build-folder-path: "www"          # 指定我們的網頁資料夾
+        app-name: "SnapPaint"             # APP 顯示名稱
+        package-name: "com.example.snapaint" # APP 內部套件名稱
+        output-folder-path: "my-apks"     # 產出 APK 的資料夾
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SnapPaint-Final-APK
+        path: my-apks/
