@@ -206,10 +206,10 @@
             gridData: [],
             colorMap: {},   
             numberMap: {},  
-            selectedHex: null
+            selectedHex: null,
+            remainingCounts: {} // Tracks how many cells are left for each color
         };
 
-        // 視圖狀態 (獨立管理縮放與平移)
         let view = { 
             scale: 1, 
             tx: 0, 
@@ -303,7 +303,7 @@
             state.scaleFactor = scaleFactors[difficultyLevel];
             showOverlay('overlay-loading');
             
-            resetView(); // 重置視圖
+            resetView(); 
             showScreen('screen-game');
 
             setTimeout(() => {
@@ -335,10 +335,9 @@
             state.gridCols = cols;
             state.gridRows = rows;
 
-            // 【核心修復 1】動態計算內部解析度，確保格子夠大以容納文字
             const MAX_DIMENSION = 2000; 
             let cellSize = Math.floor(MAX_DIMENSION / Math.max(cols, rows));
-            cellSize = Math.max(cellSize, 20); // 最小 20px 保證清晰度
+            cellSize = Math.max(cellSize, 20); 
 
             canvas.width = cols * cellSize;
             canvas.height = rows * cellSize;
@@ -382,13 +381,19 @@
             const uniqueHexes = Array.from(paletteSet).sort();
             state.colorMap = {};
             state.numberMap = {};
+            state.remainingCounts = {}; // Initialize counts
+            
             uniqueHexes.forEach((hex, index) => {
                 const numStr = String(index + 1).padStart(4, '0');
                 state.colorMap[hex] = numStr;
                 state.numberMap[numStr] = hex;
+                state.remainingCounts[hex] = 0; 
                 
                 state.gridData.forEach(cell => {
-                    if (cell.targetHex === hex) cell.targetNumber = numStr;
+                    if (cell.targetHex === hex) {
+                        cell.targetNumber = numStr;
+                        state.remainingCounts[hex]++; // Count occurrences
+                    }
                 });
             });
 
@@ -440,19 +445,16 @@
                 ctx.strokeRect(x, y, cellW, cellH);
 
                 if (!cell.filled) {
-                    // 【核心修復 2】高對比描邊演算法，確保數字在任何灰階下都清晰可見
                     const fontSize = Math.min(cellW, cellH) * 0.45; 
                     if (fontSize >= 6) { 
                         ctx.font = `bold ${fontSize}px monospace`;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
                         
-                        // 設定與文字顏色相反的描邊 (黑字白邊 / 白字黑邊)
                         ctx.strokeStyle = cell.textColor === '#000000' ? '#FFFFFF' : '#000000';
                         ctx.fillStyle = cell.textColor;
                         ctx.lineWidth = Math.max(1, fontSize / 6);
                         
-                        // 先畫描邊，再畫填充，確保極致清晰
                         ctx.strokeText(cell.targetNumber, x + cellW / 2, y + cellH / 2);
                         ctx.fillText(cell.targetNumber, x + cellW / 2, y + cellH / 2);
                     }
@@ -468,6 +470,7 @@
                 const hex = state.numberMap[num];
                 const item = document.createElement('div');
                 item.className = 'palette-item';
+                item.dataset.hex = hex; // Store hex for dynamic updates
                 item.style.backgroundColor = hexToRgbString(hex);
                 
                 const r = parseInt(hex[0], 16) * 17;
@@ -480,6 +483,23 @@
                 item.innerHTML = `<div class="palette-number" style="color:${textColor}; text-shadow: 0px 0px 3px ${shadowColor};">${num}</div>`;
                 item.onclick = () => selectColor(hex, item);
                 container.appendChild(item);
+            });
+        }
+
+        // NEW FUNCTION: Dynamically hide completed colors
+        function updatePalette() {
+            const items = document.querySelectorAll('.palette-item');
+            items.forEach(item => {
+                const hex = item.dataset.hex;
+                if (state.remainingCounts[hex] <= 0) {
+                    item.style.display = 'none'; // Disappear when fully used
+                    if (state.selectedHex === hex) {
+                        state.selectedHex = null;
+                        document.getElementById('num-input').value = '';
+                    }
+                } else {
+                    item.style.display = 'flex';
+                }
             });
         }
 
@@ -508,17 +528,15 @@
             const canvas = document.getElementById('game-canvas');
             const container = document.getElementById('canvas-container');
 
-            // 【核心修復 3】PC 端滑鼠滾輪縮放
             container.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 const delta = -e.deltaY;
                 const zoomIntensity = 0.15;
                 const newScale = view.scale + (delta > 0 ? zoomIntensity : -zoomIntensity);
-                view.scale = Math.min(Math.max(newScale, 1), 10); // 最高 10 倍
+                view.scale = Math.min(Math.max(newScale, 1), 10); 
                 applyView();
             }, { passive: false });
 
-            // 【核心修復 4】PC 端滑鼠拖拽平移
             container.addEventListener('mousedown', (e) => {
                 if (view.scale > 1) {
                     view.panning = true;
@@ -545,7 +563,6 @@
                 applyView();
             });
 
-            // 行動裝置觸控縮放
             container.ontouchstart = (e) => {
                 view.touchMove = false;
                 if (e.touches.length === 2) {
@@ -571,7 +588,6 @@
                 }
             };
             
-            // 點擊填色邏輯 (包含防拖拽誤觸機制)
             canvas.onclick = (e) => {
                 if (view.dragDist > 5 || view.touchMove) {
                     view.dragDist = 0;
@@ -602,8 +618,10 @@
                 if (cell && !cell.filled) {
                     if (cell.targetHex === state.selectedHex) {
                         cell.filled = true;
+                        state.remainingCounts[cell.targetHex]--; // Decrement count
                         drawCanvas();
                         updateProgress();
+                        updatePalette(); // Trigger UI update
                         checkWin();
                     } else {
                         showToast("編號不符，請重新選擇！");
@@ -638,8 +656,13 @@
 
         function resetGrid() {
             state.gridData.forEach(c => c.filled = false);
+            // Reset counts
+            for (let hex in state.remainingCounts) {
+                state.remainingCounts[hex] = state.gridData.filter(c => c.targetHex === hex).length;
+            }
             drawCanvas();
             updateProgress();
+            updatePalette(); // Restore hidden colors
             showToast("已重置畫布");
         }
 
