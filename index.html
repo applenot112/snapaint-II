@@ -69,6 +69,7 @@
             position: relative; overflow: hidden; display: flex; 
             justify-content: center; align-items: center; background: #1A252F;
             width: 100%; 
+            touch-action: none; /* 禁止瀏覽器預設觸控手勢 */
         }
         #game-canvas {
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
@@ -148,7 +149,7 @@
 
     <div id="screen-res" class="screen">
         <h2>‹ 選擇遊玩解析度</h2>
-        <p>自動依據圖片比例生成網格。解析度越高、格數越多、越考眼力。<br>照片會由 16,777,216 色濃縮至最多 4,096 色。</p>
+        <p>自動依據圖片比例生成網格。解析度越高、格數越多、越考眼力。<br>💡 <b>操作提示</b>：左鍵/單指滑動可連續填色；右鍵/雙指可拖動與縮放畫布。</p>
         <button class="btn" onclick="startGame(1)">最高難度 (原圖比例 1/1)</button>
         <button class="btn" onclick="startGame(2)">第二難度 (面積 1/4)</button>
         <button class="btn" onclick="startGame(3)">第三難度 (面積 1/16)</button>
@@ -177,7 +178,7 @@
             <div id="palette-container"></div>
             <div id="toolbar">
                 <button onclick="resetGrid()">↺ 重置</button>
-                <input type="text" id="num-input" placeholder="0001" maxlength="4" inputmode="numeric">
+                <input type="text" id="num-input" placeholder="1" maxlength="4" inputmode="numeric">
                 <button onclick="selectNumFromInput()" style="flex: 0.5; background: var(--primary); color: white;">選擇</button>
             </div>
         </div>
@@ -223,11 +224,13 @@
             ty: 0, 
             panning: false, 
             sx: 0, 
-            sy: 0, 
-            lx: 0, 
-            ly: 0, 
-            dragDist: 0, 
-            touchMove: false 
+            sy: 0,
+            startDist: 0,
+            startScale: 1,
+            startMidX: 0,
+            startMidY: 0,
+            startTx: 0,
+            startTy: 0
         };
 
         function clamp(num, min, max) {
@@ -272,8 +275,10 @@
 
             canvas.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
             
-            if (view.scale > 1) {
-                container.style.cursor = view.panning ? 'grabbing' : 'grab';
+            if (view.panning) {
+                container.style.cursor = 'grabbing';
+            } else if (view.scale > 1) {
+                container.style.cursor = 'grab';
             } else {
                 container.style.cursor = 'crosshair';
             }
@@ -415,7 +420,8 @@
             state.remainingCounts = {}; 
             
             uniqueHexes.forEach((hex, index) => {
-                const numStr = String(index + 1).padStart(4, '0');
+                // 【核心更新 1】去除前置 0
+                const numStr = String(index + 1); 
                 state.colorMap[hex] = numStr;
                 state.numberMap[numStr] = hex;
                 state.remainingCounts[hex] = 0; 
@@ -479,16 +485,14 @@
                 ctx.strokeRect(x, y, cellW, cellH);
 
                 if (!cell.filled) {
-                    // 【核心修復】自適應文字寬度與安全邊距，防止超界與貼邊
-                    const paddingX = cellW * 0.1; // 左右各留 10% 安全邊距
-                    const paddingY = cellH * 0.15; // 上下各留 15% 安全邊距
+                    const paddingX = cellW * 0.1; 
+                    const paddingY = cellH * 0.15; 
                     const maxTextWidth = cellW - (paddingX * 2);
                     const maxTextHeight = cellH - (paddingY * 2);
                     
                     let fontSize = Math.min(cellW, cellH) * 0.45; 
                     ctx.font = `bold ${fontSize}px monospace`;
                     
-                    // 測量 4 位數字的實際寬度並自動縮放
                     const metrics = ctx.measureText(cell.targetNumber);
                     if (metrics.width > maxTextWidth) {
                         fontSize = fontSize * (maxTextWidth / metrics.width);
@@ -497,19 +501,17 @@
                         fontSize = maxTextHeight;
                     }
                     
-                    // 若格子極小 (低於 4px)，隱藏文字避免糊成一團，提示用戶放大查看
                     if (fontSize < 4) return; 
                     
                     ctx.font = `bold ${fontSize}px monospace`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     
-                    // 動態描邊粗細：字體越小，描邊越細，防止文字內部被塗滿
                     const strokeWidth = Math.max(0.5, Math.min(2.5, fontSize / 6));
                     ctx.strokeStyle = cell.textColor === '#000000' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.9)';
                     ctx.fillStyle = cell.textColor;
                     ctx.lineWidth = strokeWidth;
-                    ctx.lineJoin = 'round'; // 圓角描邊，避免尖刺
+                    ctx.lineJoin = 'round'; 
                     
                     const cx = x + cellW / 2;
                     const cy = y + cellH / 2;
@@ -524,7 +526,7 @@
             const container = document.getElementById('palette-container');
             container.innerHTML = '';
             
-            Object.keys(state.numberMap).sort().forEach(num => {
+            Object.keys(state.numberMap).sort((a, b) => parseInt(a) - parseInt(b)).forEach(num => {
                 const hex = state.numberMap[num];
                 const item = document.createElement('div');
                 item.className = 'palette-item';
@@ -568,8 +570,9 @@
         }
 
         function selectNumFromInput() {
-            const val = document.getElementById('num-input').value.padStart(4, '0');
-            if (/^\d{4}$/.test(val)) {
+            const val = document.getElementById('num-input').value;
+            // 【核心更新 2】驗證 1~4 位數字
+            if (/^\d{1,4}$/.test(val)) {
                 if (state.numberMap[val]) {
                     selectColor(state.numberMap[val], null);
                     showToast(`已選擇編號: ${val}`);
@@ -577,14 +580,69 @@
                     showToast("編號不存在！");
                 }
             } else {
-                showToast("格式錯誤：請輸入 4 位數字");
+                showToast("格式錯誤：請輸入 1-4 位數字");
+            }
+        }
+
+        // 【核心更新 3】精確座標轉換演算法
+        function getGridCoords(clientX, clientY) {
+            const canvas = document.getElementById('game-canvas');
+            const container = document.getElementById('canvas-container');
+            
+            const cssW = canvas.offsetWidth;
+            const cssH = canvas.offsetHeight;
+            
+            const containerRect = container.getBoundingClientRect();
+            const centerX = containerRect.left + containerRect.width / 2;
+            const centerY = containerRect.top + containerRect.height / 2;
+            
+            const dx = clientX - centerX;
+            const dy = clientY - centerY;
+            
+            const dxLocal = (dx - view.tx) / view.scale;
+            const dyLocal = (dy - view.ty) / view.scale;
+            
+            const cssX = dxLocal + cssW / 2;
+            const cssY = dyLocal + cssH / 2;
+            
+            const internalX = cssX * (canvas.width / cssW);
+            const internalY = cssY * (canvas.height / cssH);
+            
+            const cellW = canvas.width / state.gridCols;
+            const cellH = canvas.height / state.gridRows;
+            
+            const c = Math.floor(internalX / cellW);
+            const r = Math.floor(internalY / cellH);
+            
+            if (r >= 0 && r < state.gridRows && c >= 0 && c < state.gridCols) {
+                return { r, c };
+            }
+            return null;
+        }
+
+        function attemptFill(clientX, clientY) {
+            if (!state.selectedHex) return;
+            const coords = getGridCoords(clientX, clientY);
+            if (!coords) return;
+            
+            const cell = state.gridData.find(g => g.r === coords.r && g.c === coords.c);
+            if (cell && !cell.filled && cell.targetHex === state.selectedHex) {
+                cell.filled = true;
+                state.remainingCounts[cell.targetHex]--;
+                drawCanvas();
+                updateProgress();
+                updatePalette();
+                checkWin();
             }
         }
 
         function setupCanvasEvents() {
             const canvas = document.getElementById('game-canvas');
             const container = document.getElementById('canvas-container');
+            let isLeftMouseDown = false;
+            let isSingleTouch = false;
 
+            // PC 滾輪縮放
             container.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 const delta = -e.deltaY;
@@ -594,113 +652,91 @@
                 applyView();
             }, { passive: false });
 
+            // PC 滑鼠事件 (左鍵填色，右鍵平移)
             container.addEventListener('mousedown', (e) => {
-                if (view.scale > 1) {
+                if (e.button === 0) { // 左鍵
+                    isLeftMouseDown = true;
+                    attemptFill(e.clientX, e.clientY);
+                } else if (e.button === 2) { // 右鍵
                     view.panning = true;
                     view.sx = e.clientX - view.tx;
                     view.sy = e.clientY - view.ty;
-                    view.lx = e.clientX;
-                    view.ly = e.clientY;
-                    view.dragDist = 0;
                     applyView();
                 }
             });
+
             window.addEventListener('mousemove', (e) => {
+                if (isLeftMouseDown) {
+                    attemptFill(e.clientX, e.clientY);
+                }
                 if (view.panning) {
                     view.tx = e.clientX - view.sx;
                     view.ty = e.clientY - view.sy;
-                    view.dragDist += Math.abs(e.clientX - view.lx) + Math.abs(e.clientY - view.ly);
-                    view.lx = e.clientX;
-                    view.ly = e.clientY;
                     applyView();
                 }
             });
-            window.addEventListener('mouseup', () => {
-                view.panning = false;
-                applyView();
-            });
 
-            container.ontouchstart = (e) => {
-                view.touchMove = false;
-                if (e.touches.length === 2) {
-                    view.startDist = Math.hypot(
-                        e.touches[0].pageX - e.touches[1].pageX,
-                        e.touches[0].pageY - e.touches[1].pageY
-                    );
-                }
-            };
-
-            container.ontouchmove = (e) => {
-                view.touchMove = true;
-                if (e.touches.length === 2) {
-                    e.preventDefault(); 
-                    const currentDist = Math.hypot(
-                        e.touches[0].pageX - e.touches[1].pageX,
-                        e.touches[0].pageY - e.touches[1].pageY
-                    );
-                    view.scale *= currentDist / view.startDist;
-                    view.scale = Math.min(Math.max(view.scale, 1), 10); 
-                    view.startDist = currentDist;
+            window.addEventListener('mouseup', (e) => {
+                if (e.button === 0) isLeftMouseDown = false;
+                if (e.button === 2) {
+                    view.panning = false;
                     applyView();
                 }
-            };
+            });
+
+            // 禁用右鍵選單
+            container.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            // 手機觸控事件 (單指填色，雙指縮放/平移)
+            container.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    isSingleTouch = true;
+                    attemptFill(e.touches[0].clientX, e.touches[0].clientY);
+                } else if (e.touches.length === 2) {
+                    isSingleTouch = false;
+                    const t1 = e.touches[0], t2 = e.touches[1];
+                    view.startDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                    view.startScale = view.scale;
+                    view.startMidX = (t1.clientX + t2.clientX) / 2;
+                    view.startMidY = (t1.clientY + t2.clientY) / 2;
+                    view.startTx = view.tx;
+                    view.startTy = view.ty;
+                }
+            }, { passive: false });
+
+            container.addEventListener('touchmove', (e) => {
+                e.preventDefault(); 
+                if (e.touches.length === 1 && isSingleTouch) {
+                    attemptFill(e.touches[0].clientX, e.touches[0].clientY);
+                } else if (e.touches.length === 2) {
+                    const t1 = e.touches[0], t2 = e.touches[1];
+                    const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                    const midX = (t1.clientX + t2.clientX) / 2;
+                    const midY = (t1.clientY + t2.clientY) / 2;
+                    
+                    view.scale = Math.min(Math.max(view.startScale * (currentDist / view.startDist), 1), 10);
+                    view.tx = view.startTx + (midX - view.startMidX);
+                    view.ty = view.startTy + (midY - view.startMidY);
+                    applyView();
+                }
+            }, { passive: false });
+
+            container.addEventListener('touchend', (e) => {
+                if (e.touches.length === 0) isSingleTouch = false;
+            });
             
-            let lastTap = 0;
+            // 雙擊/雙觸重置視圖
             container.addEventListener('dblclick', resetView);
+            let lastTap = 0;
             container.addEventListener('touchend', (e) => {
                 if (e.touches.length > 0) return; 
                 const now = Date.now();
-                if (now - lastTap < 300) {
-                    resetView();
-                }
+                if (now - lastTap < 300) resetView();
                 lastTap = now;
             });
-
-            canvas.onclick = (e) => {
-                if (view.dragDist > 5 || view.touchMove) {
-                    view.dragDist = 0;
-                    view.touchMove = false;
-                    return; 
-                }
-
-                if (!state.selectedHex) {
-                    showToast("請先選擇顏色編號！");
-                    return;
-                }
-
-                const rect = canvas.getBoundingClientRect();
-                const scaleX = canvas.width / rect.width;
-                const scaleY = canvas.height / rect.height;
-                
-                const x = (e.clientX - rect.left) * scaleX;
-                const y = (e.clientY - rect.top) * scaleY;
-
-                const cellW = canvas.width / state.gridCols;
-                const cellH = canvas.height / state.gridRows;
-
-                const c = Math.floor(x / cellW);
-                const r = Math.floor(y / cellH);
-
-                const cell = state.gridData.find(g => g.r === r && g.c === c);
-                
-                if (cell && !cell.filled) {
-                    if (cell.targetHex === state.selectedHex) {
-                        cell.filled = true;
-                        state.remainingCounts[cell.targetHex]--; 
-                        drawCanvas();
-                        updateProgress();
-                        updatePalette(); 
-                        checkWin();
-                    } else {
-                        showToast("編號不符，請重新選擇！");
-                    }
-                }
-            };
             
             window.addEventListener('resize', resizeCanvasCSS);
-            window.addEventListener('orientationchange', () => {
-                setTimeout(resizeCanvasCSS, 300); 
-            });
+            window.addEventListener('orientationchange', () => setTimeout(resizeCanvasCSS, 300));
         }
 
         function updateProgress() {
