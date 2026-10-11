@@ -69,7 +69,7 @@
             position: relative; overflow: hidden; display: flex; 
             justify-content: center; align-items: center; background: #1A252F;
             width: 100%; 
-            touch-action: none; /* 禁止瀏覽器預設觸控手勢 */
+            touch-action: none; 
         }
         #game-canvas {
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
@@ -86,21 +86,53 @@
             flex-shrink: 0; 
         }
         #palette-container {
-            display: flex; gap: 12px; overflow-x: auto; padding: 5px 0;
+            display: flex; gap: 16px; overflow-x: auto; padding: 8px 4px;
             scrollbar-width: thin;
         }
+        
+        /* 調色板項目容器 (包含圓圈與進度條) */
         .palette-item {
-            min-width: 60px; width: 60px; height: 60px; border-radius: 50%; 
-            display: flex; justify-content: center; align-items: center;
-            border: 3px solid transparent; cursor: pointer; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .palette-item.selected .palette-circle {
+            border-color: #E74C3C;
+            transform: scale(1.1);
+        }
+        .palette-circle {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 3px solid transparent;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
             transition: all 0.2s;
-            flex-shrink: 0;
         }
-        .palette-item.selected { border-color: #E74C3C; transform: scale(1.15); }
         .palette-number {
             font-family: monospace; font-weight: bold; font-size: 1rem;
             pointer-events: none;
+        }
+        
+        /* 進度條樣式 */
+        .palette-progress {
+            width: 50px;
+            height: 6px;
+            background: rgba(128, 128, 128, 0.2);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .palette-progress-fill {
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 3px;
         }
 
         #toolbar { display: flex; gap: 10px; align-items: center; }
@@ -215,7 +247,8 @@
             colorMap: {},   
             numberMap: {},  
             selectedHex: null,
-            remainingCounts: {} 
+            remainingCounts: {},
+            totalCounts: {} 
         };
 
         let view = { 
@@ -418,18 +451,20 @@
             state.colorMap = {};
             state.numberMap = {};
             state.remainingCounts = {}; 
+            state.totalCounts = {};
             
             uniqueHexes.forEach((hex, index) => {
-                // 【核心更新 1】去除前置 0
                 const numStr = String(index + 1); 
                 state.colorMap[hex] = numStr;
                 state.numberMap[numStr] = hex;
                 state.remainingCounts[hex] = 0; 
+                state.totalCounts[hex] = 0;
                 
                 state.gridData.forEach(cell => {
                     if (cell.targetHex === hex) {
                         cell.targetNumber = numStr;
                         state.remainingCounts[hex]++; 
+                        state.totalCounts[hex]++;
                     }
                 });
             });
@@ -531,7 +566,6 @@
                 const item = document.createElement('div');
                 item.className = 'palette-item';
                 item.dataset.hex = hex; 
-                item.style.backgroundColor = hexToRgbString(hex);
                 
                 const r = parseInt(hex[0], 16) * 17;
                 const g = parseInt(hex[1], 16) * 17;
@@ -540,7 +574,14 @@
                 const textColor = brightness > 128 ? '#000000' : '#FFFFFF';
                 const shadowColor = brightness > 128 ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.8)';
 
-                item.innerHTML = `<div class="palette-number" style="color:${textColor}; text-shadow: 0px 0px 3px ${shadowColor};">${num}</div>`;
+                item.innerHTML = `
+                    <div class="palette-circle" style="background-color: ${hexToRgbString(hex)}">
+                        <div class="palette-number" style="color:${textColor}; text-shadow: 0px 0px 3px ${shadowColor};">${num}</div>
+                    </div>
+                    <div class="palette-progress">
+                        <div class="palette-progress-fill" style="background-color: ${hexToRgbString(hex)}"></div>
+                    </div>
+                `;
                 item.onclick = () => selectColor(hex, item);
                 container.appendChild(item);
             });
@@ -550,7 +591,16 @@
             const items = document.querySelectorAll('.palette-item');
             items.forEach(item => {
                 const hex = item.dataset.hex;
-                if (state.remainingCounts[hex] <= 0) {
+                const remaining = state.remainingCounts[hex];
+                const total = state.totalCounts[hex];
+                const pct = total > 0 ? ((total - remaining) / total) * 100 : 0;
+                
+                const fill = item.querySelector('.palette-progress-fill');
+                if (fill) {
+                    fill.style.width = `${pct}%`;
+                }
+
+                if (remaining <= 0) {
                     item.style.display = 'none'; 
                     if (state.selectedHex === hex) {
                         state.selectedHex = null;
@@ -571,7 +621,6 @@
 
         function selectNumFromInput() {
             const val = document.getElementById('num-input').value;
-            // 【核心更新 2】驗證 1~4 位數字
             if (/^\d{1,4}$/.test(val)) {
                 if (state.numberMap[val]) {
                     selectColor(state.numberMap[val], null);
@@ -584,7 +633,6 @@
             }
         }
 
-        // 【核心更新 3】精確座標轉換演算法
         function getGridCoords(clientX, clientY) {
             const canvas = document.getElementById('game-canvas');
             const container = document.getElementById('canvas-container');
@@ -642,7 +690,6 @@
             let isLeftMouseDown = false;
             let isSingleTouch = false;
 
-            // PC 滾輪縮放
             container.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 const delta = -e.deltaY;
@@ -652,12 +699,11 @@
                 applyView();
             }, { passive: false });
 
-            // PC 滑鼠事件 (左鍵填色，右鍵平移)
             container.addEventListener('mousedown', (e) => {
-                if (e.button === 0) { // 左鍵
+                if (e.button === 0) { 
                     isLeftMouseDown = true;
                     attemptFill(e.clientX, e.clientY);
-                } else if (e.button === 2) { // 右鍵
+                } else if (e.button === 2) { 
                     view.panning = true;
                     view.sx = e.clientX - view.tx;
                     view.sy = e.clientY - view.ty;
@@ -684,10 +730,8 @@
                 }
             });
 
-            // 禁用右鍵選單
             container.addEventListener('contextmenu', (e) => e.preventDefault());
 
-            // 手機觸控事件 (單指填色，雙指縮放/平移)
             container.addEventListener('touchstart', (e) => {
                 if (e.touches.length === 1) {
                     isSingleTouch = true;
@@ -725,7 +769,6 @@
                 if (e.touches.length === 0) isSingleTouch = false;
             });
             
-            // 雙擊/雙觸重置視圖
             container.addEventListener('dblclick', resetView);
             let lastTap = 0;
             container.addEventListener('touchend', (e) => {
@@ -764,7 +807,7 @@
         function resetGrid() {
             state.gridData.forEach(c => c.filled = false);
             for (let hex in state.remainingCounts) {
-                state.remainingCounts[hex] = state.gridData.filter(c => c.targetHex === hex).length;
+                state.remainingCounts[hex] = state.totalCounts[hex];
             }
             drawCanvas();
             updateProgress();
